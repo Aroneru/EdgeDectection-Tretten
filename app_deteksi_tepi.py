@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image, ImageTk
 import math
 from skimage.util import random_noise
-import pillow_heif  # Import pustaka untuk HEIC
+import pillow_heif  
 
 # Mendaftarkan opener HEIC agar PIL bisa membacanya langsung
 pillow_heif.register_heif_opener()
@@ -38,9 +38,7 @@ class ImageProcessor:
 
         # 3. Jika berhasil dimuat (baik via OpenCV atau Pillow)
         if self.original_image is not None:
-            # Simpan versi RGB untuk ditampilkan di UI
             self.rgb_image = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2RGB)
-            # Simpan versi Grayscale untuk pemrosesan
             self.gray_image = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2GRAY)
             return True
             
@@ -148,33 +146,37 @@ class ZoomableImageFrame(tk.Frame):
         else: 
             self.pil_image = Image.fromarray(cv_img) 
         
-        # Hitung scale agar fit to frame
-        self.scale = self._calculate_fit_scale()
+        # Hitung skala agar fit to frame
+        self.scale = self.calculate_fit_scale()
         self.redraw_image()
 
-    def _calculate_fit_scale(self):
-        """Hitung scale agar gambar pas dengan canvas"""
+    def calculate_fit_scale(self):
+        """Menghitung skala agar gambar fit ke canvas"""
         if self.pil_image is None:
             return 1.0
         
-        # Update canvas agar mendapat ukuran sebenarnya
-        self.canvas.update()
+        # Update canvas agar mendapat ukuran terbaru
+        self.canvas.update_idletasks()
+        
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
         
-        # Hindari pembagian dengan 0
+        # Jika canvas belum di-render (width/height = 1), gunakan ukuran default
         if canvas_width <= 1 or canvas_height <= 1:
             canvas_width = 600
             canvas_height = 400
         
         img_width, img_height = self.pil_image.size
         
-        # Hitung scale untuk fit width dan fit height
+        # Hitung skala berdasarkan lebar dan tinggi
         scale_width = canvas_width / img_width
         scale_height = canvas_height / img_height
         
-        # Gunakan scale terkecil agar gambar muat di canvas
-        return min(scale_width, scale_height, 1.0)  # Max 1.0 (100%)
+        # Pilih skala terkecil agar gambar tidak terpotong
+        scale = min(scale_width, scale_height)
+        
+        # Batasi maksimal skala = 1.0 (tidak memperbesar)
+        return min(scale, 1.0)
 
     def on_zoom(self, event):
         if self.pil_image is None: return
@@ -184,7 +186,8 @@ class ZoomableImageFrame(tk.Frame):
         elif event.num == 5 or event.delta < 0:
             self.scale /= 1.1
 
-        if self.scale > 3.0: self.scale = 3.0  # Max zoom 300%
+        # Hapus batasan scale > 1.0 agar bisa zoom in lebih besar
+        # if self.scale > 1.0: self.scale = 1.0
         if self.scale < 0.05: self.scale = 0.05
 
         self.redraw_image()
@@ -208,12 +211,13 @@ class ZoomableImageFrame(tk.Frame):
 class EdgeDetectionApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Edge Detection App")
-        self.root.geometry("1300x800")
+        self.root.title("Edge Detection Analysis Tool")
+        self.root.geometry("1300x850")
         self.processor = ImageProcessor()
 
-        left_frame = tk.Frame(root, width=280, bg="#f0f0f0", padx=10, pady=10)
+        left_frame = tk.Frame(root, width=250, bg="#f0f0f0", padx=8, pady=10)
         left_frame.pack(side=tk.LEFT, fill=tk.Y)
+        left_frame.pack_propagate(False)  # Mencegah frame menyesuaikan ukuran dengan konten
         
         right_frame = tk.Frame(root, bg="white")
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -239,34 +243,57 @@ class EdgeDetectionApp:
         self.noise_level.set(0.05)
         self.noise_level.pack(fill=tk.X)
 
-        tk.Label(left_frame, text="Edge Detection Operator:", bg="#f0f0f0").pack(anchor="w", pady=(15, 0))
+        tk.Label(left_frame, text="Single Operator Selection:", bg="#f0f0f0").pack(anchor="w", pady=(15, 0))
         self.operator_type = ttk.Combobox(left_frame, values=["Canny", "Sobel", "Prewitt", "LoG (Laplace)"], state="readonly")
         self.operator_type.current(0)
         self.operator_type.pack(fill=tk.X)
 
-        btn_process = tk.Button(left_frame, text="Analyze", command=self.process_image, bg="#2196F3", fg="white", font=("Arial", 10, "bold"))
-        btn_process.pack(fill=tk.X, pady=20)
+        # Tombol Proses Tunggal
+        btn_process = tk.Button(left_frame, text="Analyze Single Operator", command=self.process_image, bg="#2196F3", fg="white", font=("Arial", 10, "bold"))
+        btn_process.pack(fill=tk.X, pady=(10, 5))
 
-        self.lbl_metrics = tk.Label(left_frame, text="Evaluation Results:\nMSE: -\nPSNR: -", justify=tk.LEFT, bg="white", relief="sunken", padx=5, pady=5)
-        self.lbl_metrics.pack(fill=tk.X, pady=10)
+        # --- TOMBOL BARU: BANDINGKAN SEMUA ---
+        btn_compare_all = tk.Button(left_frame, text="Process & Compare All", command=self.process_all_operators, bg="#FF9800", fg="white", font=("Arial", 10, "bold"))
+        btn_compare_all.pack(fill=tk.X, pady=5)
+
+        # Frame untuk Text widget dengan scrollbar
+        metrics_frame = tk.Frame(left_frame, bg="white", relief="sunken", bd=2)
+        metrics_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
-        tk.Label(left_frame, text="Info:\n- Support JPG, PNG, HEIC\n- Tahan Ctrl + Scroll\n  untuk Zoom In/Out.", bg="#f0f0f0", fg="gray", font=("Arial", 8)).pack(side=tk.BOTTOM, pady=10)
+        # Scrollbar
+        scrollbar = tk.Scrollbar(metrics_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Text widget (menggantikan Label)
+        self.lbl_metrics = tk.Text(metrics_frame, wrap=tk.WORD, height=12, 
+                                   yscrollcommand=scrollbar.set,
+                                   font=("Courier", 9), padx=5, pady=5,
+                                   bg="white", fg="black")
+        self.lbl_metrics.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.lbl_metrics.yview)
+        
+        # Set initial text
+        self.lbl_metrics.insert("1.0", "Evaluation Results:\nMSE: -\nPSNR: -")
+        self.lbl_metrics.config(state=tk.DISABLED)  # Read-only
+        
+        tk.Label(left_frame, text="Info:\n- Support JPG, PNG, HEIC\n- Ctrl + Scroll to Zoom", bg="#f0f0f0", fg="gray", font=("Arial", 8)).pack(side=tk.BOTTOM, pady=10)
 
-        # --- DISPLAY PANEL (2x2) ---
-        self.panel_rgb = ZoomableImageFrame(right_frame, title="1. Default Image (RGB)")
+        # --- DISPLAY PANEL (Main Window) ---
+        self.panel_rgb = ZoomableImageFrame(right_frame, title="1. Original Image (RGB)")
         self.panel_rgb.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
 
-        self.panel_gray = ZoomableImageFrame(right_frame, title="2. Grayscale Image")
+        self.panel_gray = ZoomableImageFrame(right_frame, title="2. Grayscale Image (Input)")
         self.panel_gray.grid(row=0, column=1, padx=5, pady=5, sticky="nsew")
 
         self.panel_noisy = ZoomableImageFrame(right_frame, title="3. Image + Noise")
         self.panel_noisy.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
 
-        self.panel_result = ZoomableImageFrame(right_frame, title="4. Edge Detection Result")
+        self.panel_result = ZoomableImageFrame(right_frame, title="4. Single Edge Result")
         self.panel_result.grid(row=1, column=1, padx=5, pady=5, sticky="nsew")
 
+        self.comparison_window = None # Store reference to popup
+
     def load_image(self):
-        # Update filter file untuk menyertakan .HEIC
         file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg;*.jpeg;*.png;*.bmp;*.heic;*.HEIC")])
         if file_path:
             if self.processor.load_image(file_path):
@@ -275,13 +302,21 @@ class EdgeDetectionApp:
                 
                 self.panel_noisy.show_image(None)
                 self.panel_result.show_image(None)
-                self.lbl_metrics.config(text="Evaluation Results:\nMSE: -\nPSNR: -")
+                self.update_metrics_text("Evaluation Results:\nMSE: -\nPSNR: -")
             else:
-                messagebox.showerror("Error", "Failed to load image. Please ensure the format is supported.")
+                messagebox.showerror("Error", "Failed to load image.")
+
+    def update_metrics_text(self, text):
+        """Helper method to update Text widget"""
+        self.lbl_metrics.config(state=tk.NORMAL)
+        self.lbl_metrics.delete("1.0", tk.END)
+        self.lbl_metrics.insert("1.0", text)
+        self.lbl_metrics.config(state=tk.DISABLED)
 
     def process_image(self):
+        """Proses hanya 1 operator (sesuai pilihan dropdown)"""
         if self.processor.gray_image is None:
-            messagebox.showwarning("Warning", "Please open an image first.")
+            messagebox.showwarning("Warning", "Please select an image first.")
             return
 
         try:
@@ -289,29 +324,117 @@ class EdgeDetectionApp:
             noise_amt = self.noise_level.get()
             op_type = self.operator_type.get()
 
-            # 1. Ground Truth
+            # Ground truth (tanpa noise)
             ground_truth = self.processor.apply_operator(self.processor.gray_image, op_type)
 
-            # 2. Add Noise
-            if noise_type != "Tidak Ada":
+            # Tambahkan noise
+            if noise_type != "No Noise":
                 noisy_img = self.processor.add_noise(self.processor.gray_image, noise_type, noise_amt)
             else:
                 noisy_img = self.processor.gray_image.copy()
             
             self.panel_noisy.show_image(noisy_img)
 
-            # 3. Edge Detection
+            # Deteksi tepi pada gambar noisy
             result_edge = self.processor.apply_operator(noisy_img, op_type)
             self.panel_result.show_image(result_edge)
 
-            # 4. Metrics
+            # Hitung metrik
             mse, psnr = self.processor.calculate_metrics(ground_truth, result_edge)
             
-            psnr_text = "Inf" if psnr == float('inf') else f"{psnr:.2f} dB"
-            self.lbl_metrics.config(text=f"Evaluation Results ({op_type}):\nMSE: {mse:.2f}\nPSNR: {psnr_text}")
+            # Format tampilan
+            psnr_text = "Inf" if psnr == float('inf') else f"{psnr:.2f}"
+            
+            metrics_text = f"Single Result ({op_type}):\n"
+            metrics_text += f"{'='*28}\n"
+            metrics_text += f"Noise: {noise_type}\n"
+            metrics_text += f"Level: {noise_amt}\n"
+            metrics_text += f"{'='*28}\n"
+            metrics_text += f"MSE: {mse:.4f}\n"
+            metrics_text += f"PSNR: {psnr_text} dB"
+            
+            self.update_metrics_text(metrics_text)
 
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def process_all_operators(self):
+        """Proses 4 operator sekaligus dan tampilkan di jendela baru"""
+        if self.processor.gray_image is None:
+            messagebox.showwarning("Warning", "Please select an image first.")
+            return
+
+        # Tutup jendela lama jika ada
+        if self.comparison_window and self.comparison_window.winfo_exists():
+            self.comparison_window.destroy()
+
+        try:
+            noise_type = self.noise_type.get()
+            noise_amt = self.noise_level.get()
+            operators = ["Canny", "Sobel", "Prewitt", "LoG (Laplace)"]
+            
+            # 1. Siapkan Gambar Noisy
+            if noise_type != "No Noise":
+                noisy_img = self.processor.add_noise(self.processor.gray_image, noise_type, noise_amt)
+            else:
+                noisy_img = self.processor.gray_image.copy()
+            
+            # Update panel noisy di main window agar user tahu inputnya apa
+            self.panel_noisy.show_image(noisy_img)
+
+            # 2. Buat Jendela Pop-up
+            self.comparison_window = tk.Toplevel(self.root)
+            self.comparison_window.title(f"Comparison: {noise_type} (Level {noise_amt})")
+            self.comparison_window.geometry("1200x800")
+            
+            # Config Grid Pop-up
+            self.comparison_window.columnconfigure(0, weight=1)
+            self.comparison_window.columnconfigure(1, weight=1)
+            self.comparison_window.rowconfigure(0, weight=1)
+            self.comparison_window.rowconfigure(1, weight=1)
+
+            # Panel-panel di jendela pop-up
+            panels = {}
+            positions = [(0,0), (0,1), (1,0), (1,1)] # Grid positions
+            
+            # Header untuk metrics summary
+            metrics_summary = f"COMPARE ALL OPERATORS\n"
+            metrics_summary += f"{'='*28}\n"
+            metrics_summary += f"Noise Type: {noise_type}\n"
+            metrics_summary += f"Noise Level: {noise_amt}\n"
+            metrics_summary += f"{'='*28}\n"
+
+            for i, op_name in enumerate(operators):
+                # A. Hitung Ground Truth dan Result
+                ground_truth = self.processor.apply_operator(self.processor.gray_image, op_name)
+                result_edge = self.processor.apply_operator(noisy_img, op_name)
+                
+                # B. Hitung Metrik
+                mse, psnr = self.processor.calculate_metrics(ground_truth, result_edge)
+                
+                # C. Format Metrik
+                psnr_text = "Inf" if psnr == float('inf') else f"{psnr:.2f}"
+                metrics_summary += f"\n{op_name}:\n"
+                metrics_summary += f"  MSE  : {mse:.4f}\n"
+                metrics_summary += f"  PSNR : {psnr_text} dB\n"
+
+                # D. Buat Panel dan Tampilkan
+                frame_title = f"{op_name} | MSE: {mse:.2f} | PSNR: {psnr_text} dB"
+                panel = ZoomableImageFrame(self.comparison_window, title=frame_title)
+                r, c = positions[i]
+                panel.grid(row=r, column=c, padx=5, pady=5, sticky="nsew")
+                panel.show_image(result_edge)
+                panels[op_name] = panel
+
+            # 3. Tampilkan Metrik di Main Window
+            self.update_metrics_text(metrics_summary)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Comparison failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     root = tk.Tk()
