@@ -148,8 +148,33 @@ class ZoomableImageFrame(tk.Frame):
         else: 
             self.pil_image = Image.fromarray(cv_img) 
         
-        self.scale = 1.0
+        # Hitung scale agar fit to frame
+        self.scale = self._calculate_fit_scale()
         self.redraw_image()
+
+    def _calculate_fit_scale(self):
+        """Hitung scale agar gambar pas dengan canvas"""
+        if self.pil_image is None:
+            return 1.0
+        
+        # Update canvas agar mendapat ukuran sebenarnya
+        self.canvas.update()
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        
+        # Hindari pembagian dengan 0
+        if canvas_width <= 1 or canvas_height <= 1:
+            canvas_width = 600
+            canvas_height = 400
+        
+        img_width, img_height = self.pil_image.size
+        
+        # Hitung scale untuk fit width dan fit height
+        scale_width = canvas_width / img_width
+        scale_height = canvas_height / img_height
+        
+        # Gunakan scale terkecil agar gambar muat di canvas
+        return min(scale_width, scale_height, 1.0)  # Max 1.0 (100%)
 
     def on_zoom(self, event):
         if self.pil_image is None: return
@@ -159,7 +184,7 @@ class ZoomableImageFrame(tk.Frame):
         elif event.num == 5 or event.delta < 0:
             self.scale /= 1.1
 
-        if self.scale > 1.0: self.scale = 1.0
+        if self.scale > 3.0: self.scale = 3.0  # Max zoom 300%
         if self.scale < 0.05: self.scale = 0.05
 
         self.redraw_image()
@@ -183,7 +208,7 @@ class ZoomableImageFrame(tk.Frame):
 class EdgeDetectionApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Analisis Deteksi Tepi (Support HEIC + Zoom)")
+        self.root.title("Edge Detection App")
         self.root.geometry("1300x800")
         self.processor = ImageProcessor()
 
@@ -199,45 +224,45 @@ class EdgeDetectionApp:
         right_frame.rowconfigure(1, weight=1)
 
         # --- KONTROL PANEL ---
-        tk.Label(left_frame, text="Kontrol Panel", font=("Arial", 14, "bold"), bg="#f0f0f0").pack(pady=10)
+        tk.Label(left_frame, text="Control Panel", font=("Arial", 14, "bold"), bg="#f0f0f0").pack(pady=10)
 
-        btn_load = tk.Button(left_frame, text="Buka Gambar", command=self.load_image, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"))
+        btn_load = tk.Button(left_frame, text="Select Image", command=self.load_image, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"))
         btn_load.pack(fill=tk.X, pady=5)
 
-        tk.Label(left_frame, text="Jenis Noise:", bg="#f0f0f0").pack(anchor="w", pady=(15, 0))
-        self.noise_type = ttk.Combobox(left_frame, values=["Tidak Ada", "Salt & Pepper", "Gaussian"], state="readonly")
+        tk.Label(left_frame, text="Noise Type:", bg="#f0f0f0").pack(anchor="w", pady=(15, 0))
+        self.noise_type = ttk.Combobox(left_frame, values=["No Noise", "Salt & Pepper", "Gaussian"], state="readonly")
         self.noise_type.current(0)
         self.noise_type.pack(fill=tk.X)
 
-        tk.Label(left_frame, text="Level Noise (0.01 - 0.2):", bg="#f0f0f0").pack(anchor="w", pady=(5, 0))
+        tk.Label(left_frame, text="Noise Level (0.01 - 0.2):", bg="#f0f0f0").pack(anchor="w", pady=(5, 0))
         self.noise_level = tk.Scale(left_frame, from_=0.0, to=0.2, resolution=0.01, orient=tk.HORIZONTAL, bg="#f0f0f0")
         self.noise_level.set(0.05)
         self.noise_level.pack(fill=tk.X)
 
-        tk.Label(left_frame, text="Operator Deteksi Tepi:", bg="#f0f0f0").pack(anchor="w", pady=(15, 0))
+        tk.Label(left_frame, text="Edge Detection Operator:", bg="#f0f0f0").pack(anchor="w", pady=(15, 0))
         self.operator_type = ttk.Combobox(left_frame, values=["Canny", "Sobel", "Prewitt", "LoG (Laplace)"], state="readonly")
         self.operator_type.current(0)
         self.operator_type.pack(fill=tk.X)
 
-        btn_process = tk.Button(left_frame, text="Proses Analisis", command=self.process_image, bg="#2196F3", fg="white", font=("Arial", 10, "bold"))
+        btn_process = tk.Button(left_frame, text="Analyze", command=self.process_image, bg="#2196F3", fg="white", font=("Arial", 10, "bold"))
         btn_process.pack(fill=tk.X, pady=20)
 
-        self.lbl_metrics = tk.Label(left_frame, text="Hasil Evaluasi:\nMSE: -\nPSNR: -", justify=tk.LEFT, bg="white", relief="sunken", padx=5, pady=5)
+        self.lbl_metrics = tk.Label(left_frame, text="Evaluation Results:\nMSE: -\nPSNR: -", justify=tk.LEFT, bg="white", relief="sunken", padx=5, pady=5)
         self.lbl_metrics.pack(fill=tk.X, pady=10)
         
         tk.Label(left_frame, text="Info:\n- Support JPG, PNG, HEIC\n- Tahan Ctrl + Scroll\n  untuk Zoom In/Out.", bg="#f0f0f0", fg="gray", font=("Arial", 8)).pack(side=tk.BOTTOM, pady=10)
 
         # --- DISPLAY PANEL (2x2) ---
-        self.panel_rgb = ZoomableImageFrame(right_frame, title="1. Citra Asli (Berwarna)")
+        self.panel_rgb = ZoomableImageFrame(right_frame, title="1. Default Image (RGB)")
         self.panel_rgb.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
 
-        self.panel_gray = ZoomableImageFrame(right_frame, title="2. Citra Grayscale (Input)")
+        self.panel_gray = ZoomableImageFrame(right_frame, title="2. Grayscale Image")
         self.panel_gray.grid(row=0, column=1, padx=5, pady=5, sticky="nsew")
 
-        self.panel_noisy = ZoomableImageFrame(right_frame, title="3. Citra + Noise")
+        self.panel_noisy = ZoomableImageFrame(right_frame, title="3. Image + Noise")
         self.panel_noisy.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
 
-        self.panel_result = ZoomableImageFrame(right_frame, title="4. Hasil Deteksi Tepi")
+        self.panel_result = ZoomableImageFrame(right_frame, title="4. Edge Detection Result")
         self.panel_result.grid(row=1, column=1, padx=5, pady=5, sticky="nsew")
 
     def load_image(self):
@@ -250,13 +275,13 @@ class EdgeDetectionApp:
                 
                 self.panel_noisy.show_image(None)
                 self.panel_result.show_image(None)
-                self.lbl_metrics.config(text="Hasil Evaluasi:\nMSE: -\nPSNR: -")
+                self.lbl_metrics.config(text="Evaluation Results:\nMSE: -\nPSNR: -")
             else:
-                messagebox.showerror("Error", "Gagal memuat gambar. Pastikan format didukung.")
+                messagebox.showerror("Error", "Failed to load image. Please ensure the format is supported.")
 
     def process_image(self):
         if self.processor.gray_image is None:
-            messagebox.showwarning("Peringatan", "Harap buka gambar terlebih dahulu.")
+            messagebox.showwarning("Warning", "Please open an image first.")
             return
 
         try:
@@ -283,10 +308,10 @@ class EdgeDetectionApp:
             mse, psnr = self.processor.calculate_metrics(ground_truth, result_edge)
             
             psnr_text = "Inf" if psnr == float('inf') else f"{psnr:.2f} dB"
-            self.lbl_metrics.config(text=f"Hasil Evaluasi ({op_type}):\nMSE: {mse:.2f}\nPSNR: {psnr_text}")
+            self.lbl_metrics.config(text=f"Evaluation Results ({op_type}):\nMSE: {mse:.2f}\nPSNR: {psnr_text}")
 
         except Exception as e:
-            messagebox.showerror("Error", f"Terjadi kesalahan: {str(e)}")
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()
