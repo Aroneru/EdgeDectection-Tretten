@@ -5,20 +5,45 @@ import numpy as np
 from PIL import Image, ImageTk
 import math
 from skimage.util import random_noise
+import pillow_heif  # Import pustaka untuk HEIC
+
+# Mendaftarkan opener HEIC agar PIL bisa membacanya langsung
+pillow_heif.register_heif_opener()
 
 # --- BACKEND LOGIC (Pemrosesan Citra) ---
 class ImageProcessor:
     def __init__(self):
-        self.original_image = None
-        self.gray_image = None
+        self.original_image = None # BGR Format (OpenCV standard)
+        self.rgb_image = None      # RGB Format (Untuk Display GUI)
+        self.gray_image = None     # Grayscale Format (Untuk Proses Deteksi)
 
     def load_image(self, path):
+        # 1. Coba load menggunakan OpenCV standar (JPG, PNG, BMP)
         self.original_image = cv2.imread(path)
+
+        # 2. Jika OpenCV gagal (biasanya return None untuk HEIC), gunakan Pillow+Heif
+        if self.original_image is None:
+            try:
+                # Buka menggunakan Pillow (yang sudah support HEIC via register_heif_opener)
+                pil_img = Image.open(path)
+                
+                # Konversi ke Numpy Array (Format RGB)
+                rgb_array = np.array(pil_img)
+                
+                # Konversi RGB ke BGR agar formatnya seragam dengan OpenCV
+                self.original_image = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR)
+            except Exception as e:
+                print(f"Gagal membuka gambar: {e}")
+                return False
+
+        # 3. Jika berhasil dimuat (baik via OpenCV atau Pillow)
         if self.original_image is not None:
-            # Konversi BGR (OpenCV) ke RGB (untuk tampilan yang benar di GUI)
+            # Simpan versi RGB untuk ditampilkan di UI
             self.rgb_image = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2RGB)
+            # Simpan versi Grayscale untuk pemrosesan
             self.gray_image = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2GRAY)
             return True
+            
         return False
 
     def add_noise(self, image, noise_type, amount):
@@ -68,13 +93,13 @@ class ImageProcessor:
         psnr = 20 * math.log10(max_pixel / math.sqrt(mse))
         return mse, psnr
 
-# --- KOMPONEN GUI BARU (Zoomable Image) ---
+# --- KOMPONEN GUI (Zoomable Image Frame) ---
 class ZoomableImageFrame(tk.Frame):
     def __init__(self, master=None, title="Image", **kwargs):
         super().__init__(master, **kwargs)
         self.config(bg="white", bd=2, relief="groove")
         
-        # Header Frame (Judul + Info Zoom)
+        # Header
         header_frame = tk.Frame(self, bg="white")
         header_frame.pack(side=tk.TOP, fill=tk.X)
         
@@ -84,7 +109,7 @@ class ZoomableImageFrame(tk.Frame):
         self.lbl_zoom = tk.Label(header_frame, text="Zoom: 100%", bg="white", fg="blue", font=("Arial", 9))
         self.lbl_zoom.pack(side=tk.RIGHT, padx=5)
 
-        # Container Canvas
+        # Canvas
         self.canvas_frame = tk.Frame(self, bg="white")
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -102,16 +127,14 @@ class ZoomableImageFrame(tk.Frame):
         self.hbar.pack(side=tk.BOTTOM, fill=tk.X)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Event Binding untuk Zoom (Ctrl + MouseWheel)
-        # Windows
-        self.canvas.bind("<Control-MouseWheel>", self.on_zoom)
-        # Linux (Button-4 = scroll up, Button-5 = scroll down)
-        self.canvas.bind("<Control-Button-4>", self.on_zoom)
-        self.canvas.bind("<Control-Button-5>", self.on_zoom)
+        # Zoom Binding
+        self.canvas.bind("<Control-MouseWheel>", self.on_zoom) 
+        self.canvas.bind("<Control-Button-4>", self.on_zoom)   
+        self.canvas.bind("<Control-Button-5>", self.on_zoom)   
 
-        self.pil_image = None  # Gambar asli (PIL format)
-        self.tk_img = None     # Gambar yang ditampilkan (Tkinter format)
-        self.scale = 1.0       # Skala zoom saat ini
+        self.pil_image = None 
+        self.tk_img = None     
+        self.scale = 1.0       
 
     def show_image(self, cv_img):
         self.canvas.delete("all")
@@ -120,83 +143,62 @@ class ZoomableImageFrame(tk.Frame):
             self.lbl_zoom.config(text="")
             return
 
-        # Konversi CV image ke PIL image
-        # Pastikan mode warna benar (RGB atau L untuk Grayscale)
-        if len(cv_img.shape) == 2: # Grayscale
+        if len(cv_img.shape) == 2: 
             self.pil_image = Image.fromarray(cv_img)
-        else: # RGB
-            self.pil_image = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+        else: 
+            self.pil_image = Image.fromarray(cv_img) 
         
-        # Reset scale saat gambar baru dimuat
         self.scale = 1.0
         self.redraw_image()
 
     def on_zoom(self, event):
-        if self.pil_image is None:
-            return
-
-        # Logika deteksi scroll (Windows & Linux)
+        if self.pil_image is None: return
+        
         if event.num == 4 or event.delta > 0:
-            # Zoom In (Perbesar)
             self.scale *= 1.1
         elif event.num == 5 or event.delta < 0:
-            # Zoom Out (Perkecil)
             self.scale /= 1.1
 
-        # --- BATASAN UKURAN ---
-        # Batas Maksimum: 100% (Ukuran Asli)
-        if self.scale > 2.0:
-            self.scale = 2.0
-        
-        # Batas Minimum: Agar tidak terlalu kecil (misal 5%)
-        if self.scale < 0.05:
-            self.scale = 0.05
+        if self.scale > 1.0: self.scale = 1.0
+        if self.scale < 0.05: self.scale = 0.05
 
         self.redraw_image()
 
     def redraw_image(self):
-        if self.pil_image is None:
-            return
+        if self.pil_image is None: return
 
-        # Hitung ukuran baru berdasarkan scale
         w, h = self.pil_image.size
         new_w = int(w * self.scale)
         new_h = int(h * self.scale)
 
-        # Resize gambar menggunakan PIL (Resampling.LANCZOS untuk kualitas bagus)
         resized_pil = self.pil_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
         self.tk_img = ImageTk.PhotoImage(resized_pil)
 
-        # Gambar ulang di canvas
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self.tk_img, anchor='nw')
         self.canvas.config(scrollregion=self.canvas.bbox("all"))
-        
-        # Update Label Zoom
         self.lbl_zoom.config(text=f"Zoom: {int(self.scale * 100)}%")
 
-# --- FRONTEND LOGIC (Tampilan Utama) ---
+# --- FRONTEND LOGIC (Main App) ---
 class EdgeDetectionApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Analisis Deteksi Tepi (Zoomable)")
+        self.root.title("Analisis Deteksi Tepi (Support HEIC + Zoom)")
         self.root.geometry("1300x800")
         self.processor = ImageProcessor()
 
-        # --- Layout Utama ---
-        left_frame = tk.Frame(root, width=250, bg="#f0f0f0", padx=10, pady=10)
+        left_frame = tk.Frame(root, width=280, bg="#f0f0f0", padx=10, pady=10)
         left_frame.pack(side=tk.LEFT, fill=tk.Y)
         
         right_frame = tk.Frame(root, bg="white")
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # Grid config untuk right frame
         right_frame.columnconfigure(0, weight=1)
         right_frame.columnconfigure(1, weight=1)
         right_frame.rowconfigure(0, weight=1)
         right_frame.rowconfigure(1, weight=1)
 
-        # --- Kontrol (Kiri) ---
+        # --- KONTROL PANEL ---
         tk.Label(left_frame, text="Kontrol Panel", font=("Arial", 14, "bold"), bg="#f0f0f0").pack(pady=10)
 
         btn_load = tk.Button(left_frame, text="Buka Gambar", command=self.load_image, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"))
@@ -223,27 +225,34 @@ class EdgeDetectionApp:
         self.lbl_metrics = tk.Label(left_frame, text="Hasil Evaluasi:\nMSE: -\nPSNR: -", justify=tk.LEFT, bg="white", relief="sunken", padx=5, pady=5)
         self.lbl_metrics.pack(fill=tk.X, pady=10)
         
-        tk.Label(left_frame, text="Info:\nTahan tombol 'Ctrl'\nsambil scroll mouse\nuntuk Zoom In/Out.", bg="#f0f0f0", fg="gray", font=("Arial", 8)).pack(side=tk.BOTTOM, pady=10)
+        tk.Label(left_frame, text="Info:\n- Support JPG, PNG, HEIC\n- Tahan Ctrl + Scroll\n  untuk Zoom In/Out.", bg="#f0f0f0", fg="gray", font=("Arial", 8)).pack(side=tk.BOTTOM, pady=10)
 
-        # --- Display Gambar (Menggunakan Class Zoomable Baru) ---
-        self.panel_original = ZoomableImageFrame(right_frame, title="Citra Asli (Grayscale)")
-        self.panel_original.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+        # --- DISPLAY PANEL (2x2) ---
+        self.panel_rgb = ZoomableImageFrame(right_frame, title="1. Citra Asli (Berwarna)")
+        self.panel_rgb.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
 
-        self.panel_noisy = ZoomableImageFrame(right_frame, title="Citra + Noise")
-        self.panel_noisy.grid(row=0, column=1, padx=5, pady=5, sticky="nsew")
+        self.panel_gray = ZoomableImageFrame(right_frame, title="2. Citra Grayscale (Input)")
+        self.panel_gray.grid(row=0, column=1, padx=5, pady=5, sticky="nsew")
 
-        self.panel_result = ZoomableImageFrame(right_frame, title="Hasil Deteksi Tepi")
-        self.panel_result.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="nsew")
+        self.panel_noisy = ZoomableImageFrame(right_frame, title="3. Citra + Noise")
+        self.panel_noisy.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")
+
+        self.panel_result = ZoomableImageFrame(right_frame, title="4. Hasil Deteksi Tepi")
+        self.panel_result.grid(row=1, column=1, padx=5, pady=5, sticky="nsew")
 
     def load_image(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg;*.jpeg;*.png;*.bmp")])
+        # Update filter file untuk menyertakan .HEIC
+        file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg;*.jpeg;*.png;*.bmp;*.heic;*.HEIC")])
         if file_path:
             if self.processor.load_image(file_path):
-                self.panel_original.show_image(self.processor.gray_image)
+                self.panel_rgb.show_image(self.processor.rgb_image)
+                self.panel_gray.show_image(self.processor.gray_image)
+                
                 self.panel_noisy.show_image(None)
                 self.panel_result.show_image(None)
+                self.lbl_metrics.config(text="Hasil Evaluasi:\nMSE: -\nPSNR: -")
             else:
-                messagebox.showerror("Error", "Gagal memuat gambar.")
+                messagebox.showerror("Error", "Gagal memuat gambar. Pastikan format didukung.")
 
     def process_image(self):
         if self.processor.gray_image is None:
@@ -255,8 +264,10 @@ class EdgeDetectionApp:
             noise_amt = self.noise_level.get()
             op_type = self.operator_type.get()
 
+            # 1. Ground Truth
             ground_truth = self.processor.apply_operator(self.processor.gray_image, op_type)
 
+            # 2. Add Noise
             if noise_type != "Tidak Ada":
                 noisy_img = self.processor.add_noise(self.processor.gray_image, noise_type, noise_amt)
             else:
@@ -264,9 +275,11 @@ class EdgeDetectionApp:
             
             self.panel_noisy.show_image(noisy_img)
 
+            # 3. Edge Detection
             result_edge = self.processor.apply_operator(noisy_img, op_type)
             self.panel_result.show_image(result_edge)
 
+            # 4. Metrics
             mse, psnr = self.processor.calculate_metrics(ground_truth, result_edge)
             
             psnr_text = "Inf" if psnr == float('inf') else f"{psnr:.2f} dB"
