@@ -145,8 +145,8 @@ class ZoomableImageFrame(tk.Frame):
 
         # --- BATASAN UKURAN ---
         # Batas Maksimum: 100% (Ukuran Asli)
-        if self.scale > 1.0:
-            self.scale = 1.0
+        if self.scale > 2.0:
+            self.scale = 2.0
         
         # Batas Minimum: Agar tidak terlalu kecil (misal 5%)
         if self.scale < 0.05:
